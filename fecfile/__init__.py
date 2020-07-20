@@ -1,6 +1,6 @@
 from . import fecparser, cache
 import requests
-
+from .fecparser import Fecfile
 
 FecParserMissingMappingError = cache.FecParserMissingMappingError
 

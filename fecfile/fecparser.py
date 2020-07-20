@@ -4,9 +4,12 @@ import csv
 import json
 import os
 import warnings
+from .cache import getTypeMapping, getMapping, FecParserMissingMappingError
 
-from .cache import getTypeMapping, getMapping
-
+try:
+    import pandas as pd
+except:
+    pd = None
 
 class FecParserTypeWarning(UserWarning):
     """when data in an FEC filing doesn't match types.json"""
@@ -32,7 +35,7 @@ with open(types_file) as data_file:
 eastern = timezone('US/Eastern')
 
 
-comma_versions = ['1', '2', '3', '5']
+comma_versions = set(['1', '2', '3', '5'])
 
 
 def include_line(line, filter_list):
@@ -40,6 +43,8 @@ def include_line(line, filter_list):
         if line.startswith(f) or line.startswith('"' + f):
             return True
     return False
+
+
 
 
 def loads(input, options={}):
@@ -64,6 +69,113 @@ def loads(input, options={}):
                 out['itemizations'][form_type] = [item.data]
     return out
 
+
+from collections import defaultdict
+import io
+
+begintext = set([
+    b"[BeginText]\n",
+    b"[BEGINTEXT]\n"
+])
+endtext = set([
+    b"[EndText]\n",
+    b"[ENDTEXT]\n"
+])
+
+class Fecfile:
+    def __init__(self, fname):
+        self.file = open(fname, "rb")
+        self.header = self.prepare_header()
+
+    def prepare_header(self):
+        version = None
+        lines = []
+        while version is None:
+            line = self.file.readline()
+            try:
+                line = line.decode("utf-8")
+            except UnicodeDecodeError:
+                line = line.decode("ISO-8859-1")
+            lines.append(line)
+            header, version, header_length = parse_header(lines)
+            self.version = version
+            # self.header_length = header_length
+        return FecItem('header', header)
+
+    def prepare_itemization_buffers(self, sep = "\x1c"):
+        """
+        Divide the input lines by the name of of the form
+        """
+        if (isinstance(sep, str)):
+            sep = sep.encode('utf-8')
+        forms = defaultdict(io.BytesIO)
+        skip = False
+        for line in self.file:
+            if line in begintext:
+                skip = True
+                continue
+            if skip:
+                if line in endtext:
+                    skip = False
+                    continue
+                else:
+                    continue
+            try:
+                form, _ = line.split(sep, 1)
+            except:
+                if line == b"\n":
+                    continue
+                if line is None:
+                    continue
+                print("__________")
+                print(line)
+                raise
+            forms[form].write(line)
+        # Move pointer to the head of the fake file
+
+        self.forms = forms
+        return forms
+    def dtypes(self, form):
+        version = self.header.data['fec_version']
+        columns = getMapping(mappings, form, version)
+        my_types = dict()
+        dates = []
+        for column in columns:
+
+            try:
+                t = getTypeMapping(types, form, version, column)['type']
+            except TypeError: # when the value is None
+                t = "object"
+
+            if t == "float": t = "float64"
+            my_types[column] = t
+            if t == "date":
+                # Not on parse.
+                my_types[column] = "object"
+                dates.append(column)
+        return (columns, my_types, dates)
+
+    def to_pandas(self, form):
+        if pd is None:
+            raise ImportError("You must install pandas to use this feature.")
+        buffer = self.forms[form.encode("utf-8")]
+        buffer.seek(0)
+        try:
+            columns, dtypes, dates = self.dtypes(form)
+        except FecParserMissingMappingError:
+            return pd.DataFrame()
+        try:
+            frame = pd.read_csv(buffer, names = columns,
+              sep = "\x1c", dtype=dtypes)
+        except:
+            buffer.seek(0)
+            x = buffer.read(1000).split(b"\x1c")
+#            for k, v in zip(columns, x):
+#                print(f"{k}->{v}")
+            raise
+        for column in dates:
+            frame[column] = pd.to_datetime(frame[column], errors='coerce')
+        return frame
 
 def iter_lines(lines, options={}):
     version = None

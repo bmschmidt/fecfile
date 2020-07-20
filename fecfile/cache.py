@@ -61,14 +61,30 @@ def getTypeMapping_from_regex(types, form, version, field):
                             prop = properties[prop_key]
                             return prop
     return None
+    
+def getTypeMapping_from_regex(types, form, version, field):
+    """ Tries to find the mapping from cache before looking it up w regex """
+    for mapping in types.keys():
+        if re.match(mapping, form, re.IGNORECASE):
+            versions = types[mapping].keys()
+            for v in versions:
+                if re.match(v, version, re.IGNORECASE):
+                    properties = types[mapping][v]
+                    prop_keys = properties.keys()
+                    for prop_key in prop_keys:
+                        if re.match(prop_key, field, re.IGNORECASE):
+                            prop = properties[prop_key]
+                            return prop
+    return None
 
+import random
 
 def getTypeMapping(types, form, version, field):
     """ caches the mapping to dict """
-    key = TYPE_CACHE_KEY % (form, version, field)
+#    key = TYPE_CACHE_KEY % (form, version, field)
     try:
-        mapping = TYPE_CACHE[key]
+        mapping = TYPE_CACHE[(form, version, field)]
     except KeyError:
         mapping = getTypeMapping_from_regex(types, form, version, field)
-        TYPE_CACHE[key] = mapping
+        TYPE_CACHE[(form, version, field)] = mapping
     return mapping
